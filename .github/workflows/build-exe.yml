@@ -1,0 +1,110 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # کش اختیاری — نبود package-lock.json خطا نمی‌دهد
+      - name: Restore npm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-npm-
+
+      # اگر لاک‌فایل در مخزن نبود، همین‌جا ساخته می‌شود
+      - name: Ensure package-lock.json exists
+        shell: pwsh
+        run: |
+          if (!(Test-Path package-lock.json)) {
+            Write-Host "package-lock.json not found - generating from package.json"
+            npm install --package-lock-only
+          }
+
+      - name: Install dependencies
+        run: npm ci
+
+      # بررسی فایل‌های ضروری مخزن
+      - name: Check required files
+        shell: pwsh
+        run: |
+          $required = @("electron\main.cjs", "electron-builder.yml", "next.config.ts", "src")
+          $missing = $required | Where-Object { !(Test-Path $_) }
+          if ($missing) {
+            Write-Error "Required files are missing from the repository: $($missing -join ', '). Commit the whole project, then re-run."
+          }
+
+      # در زمان بیلد اتصال واقعی به دیتابیس لازم نیست؛ فقط مقدار متغیر باید وجود داشته باشد
+      - name: Build Next.js (standalone)
+        run: npx next build
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/app_db
+
+      # کپی امن: هر چیزی که نبود ساخته می‌شود و خطا نمی‌دهد
+      - name: Prepare standalone assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .next\standalone\.next\static | Out-Null
+          New-Item -ItemType Directory -Force .next\standalone\public | Out-Null
+          if (Test-Path .next\static) {
+            Copy-Item -Recurse -Force .next\static\* .next\standalone\.next\static\
+          }
+          if (Test-Path public) {
+            Copy-Item -Recurse -Force public\* .next\standalone\public\
+          }
+
+      # فونت‌های وزیرمتن حیاتی‌اند؛ اگر public فراموش شده باشد از node_modules بازیابی می‌شوند
+      - name: Ensure Persian fonts bundled
+        shell: pwsh
+        run: |
+          $fontDir = ".next\standalone\public\fonts"
+          if (!(Test-Path "$fontDir\Vazirmatn-FD-Regular.woff2")) {
+            Write-Host "public/fonts missing - restoring fonts from node_modules/vazirmatn"
+            New-Item -ItemType Directory -Force $fontDir | Out-Null
+            $src = "node_modules\vazirmatn\misc\Farsi-Digits\fonts\webfonts"
+            $names = @(
+              "Vazirmatn-FD-Regular.woff2", "Vazirmatn-FD-Medium.woff2",
+              "Vazirmatn-FD-SemiBold.woff2", "Vazirmatn-FD-Bold.woff2",
+              "Vazirmatn-FD-ExtraBold.woff2"
+            )
+            foreach ($n in $names) { Copy-Item "$src\$n" -Destination $fontDir -Force }
+          }
+
+      # آیکون اختیاری است؛ اگر نبود از آیکون پیش‌فرض Electron استفاده می‌شود
+      - name: Ensure app icon
+        shell: pwsh
+        run: |
+          if (!(Test-Path build\icon.png)) {
+            Write-Host "build/icon.png not found - falling back to Electron default icon"
+            (Get-Content electron-builder.yml) |
+              Where-Object { $_ -notmatch 'icon' } |
+              Set-Content electron-builder.yml
+          }
+
+      - name: Install Electron toolchain (not saved to package.json)
+        run: npm install --no-save electron electron-builder
+
+      - name: Package Windows installer + portable
+        run: npx electron-builder --win --config electron-builder.yml --publish never
+
+      - name: Upload EXE artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vaqtban-windows
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 30
