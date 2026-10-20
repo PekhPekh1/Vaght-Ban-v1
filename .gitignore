@@ -1,0 +1,21 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# electron-build output
+/release/
+/dist/
+
+# environment
+.env
+.env.local
+
+# logs
+*.log
+npm-debug.log*
+
+# misc
+.DS_Store
