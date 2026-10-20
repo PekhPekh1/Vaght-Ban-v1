@@ -1,6 +1,7 @@
 // نقطه شروع نسخه دسکتاپ «وقت‌بان»
-// سرور Next.js (خروجی standalone) را داخل همان پروسه Electron بالا می‌آورد
-// و پنجره‌ای به آدرس محلی آن باز می‌کند.
+// سرور Next.js (خروجی standalone) را داخل خود بالا می‌آورد.
+// دیتابیس به‌صورت پیش‌فرض PGlite جاسازی‌شده است — بدون نیاز به نصب هیچ چیز.
+// (اگر در %APPDATA%/<app>/config.env مقدار DATABASE_URL واقعی بنویسید، از پستگرس خارجی استفاده می‌شود.)
 
 const { app, BrowserWindow, shell, dialog } = require("electron");
 const { spawn } = require("child_process");
@@ -13,38 +14,59 @@ const HOST = "127.0.0.1";
 
 let serverProcess = null;
 let mainWindow = null;
+let serverLogStream = null;
+let lastServerError = "";
 
 function configPath() {
   return path.join(app.getPath("userData"), "config.env");
 }
 
-function loadDatabaseUrl() {
-  const fallback = "postgresql://postgres:postgres@127.0.0.1:5432/app_db";
+function logPath() {
+  return path.join(app.getPath("userData"), "vaqtban-server.log");
+}
+
+function readExternalDatabaseUrl() {
+  // فقط اگر کاربر صراحتاً آدرس دیتابیس خارجی نوشته باشد از آن استفاده می‌کنیم
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
   const p = configPath();
   try {
-    if (!fs.existsSync(p)) {
-      fs.writeFileSync(
-        p,
-        [
-          "# تنظیمات سامانه وقت‌بان (نسخه دسکتاپ)",
-          "# آدرس دیتابیس PostgreSQL را اینجا بنویسید و برنامه را دوباره باز کنید:",
-          `DATABASE_URL=${fallback}`,
-          "",
-        ].join("\n"),
-        "utf8"
-      );
+    if (fs.existsSync(p)) {
+      const line = fs
+        .readFileSync(p, "utf8")
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => /^DATABASE_URL=\S/.test(l) && !l.startsWith("#"));
+      if (line) {
+        const url = line.slice("DATABASE_URL=".length).trim();
+        return url || null;
+      }
     }
-    const line = fs
-      .readFileSync(p, "utf8")
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .find((l) => l.startsWith("DATABASE_URL="));
-    if (line) return line.slice("DATABASE_URL=".length).trim() || fallback;
-  } catch (err) {
-    console.error("reading config failed:", err);
+  } catch {
+    /* ignore */
   }
-  return fallback;
+  return null;
+}
+
+function ensureConfigFile() {
+  try {
+    const p = configPath();
+    if (fs.existsSync(p)) return;
+    fs.writeFileSync(
+      p,
+      [
+        "# تنظیمات سامانه وقت‌بان (نسخه دسکتاپ)",
+        "# از حالت عادی (دیتابیس داخلی) استفاده می‌شود و نیازی به هیچ تنظیمی نیست.",
+        "#",
+        "# اگر می‌خواهید برنامه به یک پستگرس خارجی (مثلا روی سرور شرکت) وصل شود،",
+        "# خط زیر را از حالت توضیح خارج کنید، آدرس را بنویسید و برنامه را دوباره باز کنید:",
+        "# DATABASE_URL=postgresql://user:password@server:5432/dbname",
+        "",
+      ].join("\n"),
+      "utf8"
+    );
+  } catch (err) {
+    console.error("writing config failed:", err);
+  }
 }
 
 function standaloneDir() {
@@ -60,33 +82,71 @@ function startServer() {
   const entry = path.join(dir, "server.js");
   if (!fs.existsSync(entry)) {
     dialog.showErrorBox(
-      "خطای راه‌اندازی",
-      "فایل سرور یافت نشد. نسخه دسکتاپ باید از روی خروجی standalone ساخته شود."
+      "خطای راه‌اندازی وقت‌بان",
+      "فایل سرور داخلی یافت نشد. لطفاً برنامه را دوباره نصب کنید."
     );
     app.quit();
     return;
   }
+
+  const externalDb = readExternalDatabaseUrl();
+  const dataDir = path.join(app.getPath("userData"), "pgdata");
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+  } catch {
+    /* ignore */
+  }
+
+  ensureConfigFile();
+
+  const env = {
+    ...process.env,
+    ELECTRON_RUN_AS_NODE: "1",
+    NODE_ENV: "production",
+    PORT: String(PORT),
+    HOSTNAME: HOST,
+  };
+  if (externalDb) {
+    env.DATABASE_URL = externalDb;
+  } else {
+    env.VAQTBAN_EMBEDDED = "1";
+    env.VAQTBAN_DATA_DIR = dataDir;
+  }
+  delete env.ELECTRON_RUN_AS_NODE_FROM_CLI;
+
+  try {
+    serverLogStream = fs.createWriteStream(logPath(), { flags: "a" });
+    serverLogStream.write(`\n=== vaqtban start ${new Date().toISOString()} ===\n`);
+  } catch {
+    serverLogStream = null;
+  }
+
   serverProcess = spawn(process.execPath, [entry], {
     cwd: dir,
     stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
-      NODE_ENV: "production",
-      PORT: String(PORT),
-      HOSTNAME: HOST,
-      DATABASE_URL: loadDatabaseUrl(),
-    },
+    env,
   });
-  serverProcess.stdout.on("data", (d) => console.log("[vaqtban]", String(d).trim()));
-  serverProcess.stderr.on("data", (d) => console.error("[vaqtban]", String(d).trim()));
-  serverProcess.on("exit", (code) => console.log("server exited with code", code));
+
+  const onData = (d, isErr) => {
+    const line = String(d);
+    serverLogStream?.write(line);
+    if (isErr) lastServerError = (lastServerError + line).slice(-4000);
+    (isErr ? console.error : console.log)("[vaqtban]", line.trim());
+  };
+  serverProcess.stdout.on("data", (d) => onData(d, false));
+  serverProcess.stderr.on("data", (d) => onData(d, true));
+  serverProcess.on("exit", (code, signal) => {
+    serverLogStream?.write(`server exited code=${code} signal=${signal}\n`);
+  });
 }
 
-function waitForServer(timeoutMs = 40000) {
+function waitForServer(timeoutMs = 60000) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const attempt = () => {
+      if (serverProcess && serverProcess.exitCode !== null) {
+        return reject(new Error(`server crashed with code ${serverProcess.exitCode}`));
+      }
       const socket = net.createConnection({ host: HOST, port: PORT }, () => {
         socket.end();
         resolve(true);
@@ -123,14 +183,46 @@ async function createWindow() {
   try {
     await waitForServer();
   } catch (err) {
-    console.error(err);
-    dialog.showErrorBox(
-      "خطا در اتصال به دیتابیس",
-      "سرور داخلی به‌موقع بالا نیامد. لطفاً مطمئن شوید PostgreSQL در حال اجراست و آدرس آن در فایل config.env درست است."
-    );
+    console.error("server failed to start:", err);
+    const resp = dialog.showMessageBoxSync(mainWindow, {
+      type: "error",
+      title: "خطا در اجرای سرور داخلی",
+      message: "سرور داخلی وقت‌بان بالا نیامد.",
+      detail: `خطا را بررسی کنید یا فایل لاگ را باز کنید:\n${logPath()}\n\n${
+        lastServerError ? "آخرین خطا:\n" + lastServerError.slice(-600) : ""
+      }`,
+      buttons: ["تلاش مجدد", "باز کردن فایل لاگ", "خروج"],
+      noLink: true,
+    });
+    if (resp === 2) {
+      app.quit();
+      return;
+    }
+    if (resp === 1) {
+      shell.showItemInFolder(logPath());
+    }
+    // تلاش مجدد یا ادامه بعد از مشاهده لاگ
+    killServer();
+    startServer();
+    try {
+      await waitForServer(45000);
+    } catch (err2) {
+      console.error("retry failed:", err2);
+    }
   }
   await mainWindow.loadURL(`http://${HOST}:${PORT}/`);
 }
+
+const killServer = () => {
+  if (serverProcess) {
+    try {
+      serverProcess.kill();
+    } catch {
+      /* ignore */
+    }
+    serverProcess = null;
+  }
+};
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -148,12 +240,6 @@ if (!gotLock) {
     createWindow();
   });
 
-  const killServer = () => {
-    if (serverProcess) {
-      serverProcess.kill();
-      serverProcess = null;
-    }
-  };
   app.on("before-quit", killServer);
   app.on("window-all-closed", () => {
     killServer();

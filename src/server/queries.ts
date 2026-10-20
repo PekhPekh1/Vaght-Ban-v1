@@ -1,4 +1,4 @@
-import { db } from "@/db";
+import { db, ensureDbReady } from "@/db";
 import {
   employees as employeesT,
   workSchedules,
@@ -42,6 +42,7 @@ import { hmToMin } from "@/lib/format";
 /* ─────────────────────────── تنظیمات ─────────────────────────── */
 
 export async function getSettings(): Promise<Settings> {
+  await ensureDbReady();
   const rows = await db.select().from(settingsT).limit(1);
   if (rows[0]) return rows[0];
   await db.insert(settingsT).values({}).onConflictDoNothing();

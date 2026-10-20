@@ -1,4 +1,4 @@
-import { db } from "@/db";
+import { db, ensureDbReady } from "@/db";
 import {
   employees as employeesT,
   workSchedules,
@@ -66,6 +66,7 @@ export async function isSeeded(): Promise<boolean> {
 }
 
 export async function ensureSeedDemo(): Promise<boolean> {
+  await ensureDbReady();
   if (await isSeeded()) return false;
 
   await db.insert(settingsT).values({ orgName: "شرکت نمونه پارس پیشرو" }).onConflictDoNothing();

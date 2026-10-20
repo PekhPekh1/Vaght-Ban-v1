@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.2.17",
     "@types/jalaali-js": "^1.2.0",
     "clsx": "^2.1.1",
     "dotenv": "17.3.1",
