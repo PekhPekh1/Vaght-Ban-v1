@@ -1,0 +1,39 @@
+appId: com.vaqtban.desktop
+productName: Vaqtban
+copyright: "Vaqtban HR Suite"
+
+# بدون نیاز به ویرایش package.json؛ فراداده دسکتاپ اینجاست
+extraMetadata:
+  name: vaqtban-desktop
+  version: 1.0.0
+  main: electron/main.cjs
+  private: true
+
+asar: false
+
+directories:
+  output: release
+
+files:
+  - electron/**/*
+  - .next/standalone/**/*
+  - .next/static/**/*
+  - public/**/*
+  - build/icon.png
+
+win:
+  icon: build/icon.png
+  artifactName: Vaqtban-${version}-${target}.${ext}
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: "وقت‌بان"
+  installerIcon: build/icon.png
+  uninstallerIcon: build/icon.png
