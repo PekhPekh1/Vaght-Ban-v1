@@ -1,6 +1,6 @@
 // نقطه شروع نسخه دسکتاپ «وقت‌بان»
 // سرور Next.js (خروجی standalone) را داخل خود بالا می‌آورد.
-// دیتابیس به‌صورت پیش‌فرض PGlite جاسازی‌شده است — بدون نیاز به نصب هیچ چیز.
+// دیتابیس PGlite فقط روی همین فرایند/سیستم باز می‌شود و همه مرورگرهای LAN از همین نمونه استفاده می‌کنند.
 // (اگر در %APPDATA%/<app>/config.env مقدار DATABASE_URL واقعی بنویسید، از پستگرس خارجی استفاده می‌شود.)
 
 const { app, BrowserWindow, shell, dialog } = require("electron");
@@ -8,14 +8,29 @@ const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
+const os = require("os");
 
 const PORT = Number(process.env.VAQTBAN_PORT || 9737);
-const HOST = "127.0.0.1";
+// سرور برای دسترسی سایر سیستم‌های شبکه روی همه رابط‌ها گوش می‌دهد.
+// پنجره دسکتاپ همچنان از loopback استفاده می‌کند؛ دسترسی LAN باید با Windows Firewall محدود شود.
+const BIND_HOST = process.env.VAQTBAN_HOST || "0.0.0.0";
+const LOCAL_HOST = "127.0.0.1";
 
 let serverProcess = null;
 let mainWindow = null;
 let serverLogStream = null;
 let lastServerError = "";
+
+function getLanIPv4Addresses() {
+  const interfaces = os.networkInterfaces();
+  const addresses = [];
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries || []) {
+      if (entry.family === "IPv4" && !entry.internal) addresses.push(entry.address);
+    }
+  }
+  return [...new Set(addresses)];
+}
 
 function configPath() {
   return path.join(app.getPath("userData"), "config.env");
@@ -128,7 +143,7 @@ function startServer() {
     ELECTRON_RUN_AS_NODE: "1",
     NODE_ENV: "production",
     PORT: String(PORT),
-    HOSTNAME: HOST,
+    HOSTNAME: BIND_HOST,
   };
   if (externalDb) {
     env.DATABASE_URL = externalDb;
@@ -162,6 +177,10 @@ function startServer() {
   serverProcess.on("exit", (code, signal) => {
     serverLogStream?.write(`server exited code=${code} signal=${signal}\n`);
   });
+
+  for (const ip of getLanIPv4Addresses()) {
+    console.log(`[vaqtban] LAN access: http://${ip}:${PORT}`);
+  }
 }
 
 function waitForServer(timeoutMs = 60000) {
@@ -171,7 +190,7 @@ function waitForServer(timeoutMs = 60000) {
       if (serverProcess && serverProcess.exitCode !== null) {
         return reject(new Error(`server crashed with code ${serverProcess.exitCode}`));
       }
-      const socket = net.createConnection({ host: HOST, port: PORT }, () => {
+      const socket = net.createConnection({ host: LOCAL_HOST, port: PORT }, () => {
         socket.end();
         resolve(true);
       });
@@ -234,7 +253,7 @@ async function createWindow() {
       console.error("retry failed:", err2);
     }
   }
-  await mainWindow.loadURL(`http://${HOST}:${PORT}/`);
+  await mainWindow.loadURL(`http://${LOCAL_HOST}:${PORT}/`);
 }
 
 const killServer = () => {
