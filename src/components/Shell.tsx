@@ -14,6 +14,7 @@ import {
   Menu,
 } from "lucide-react";
 import clsx from "clsx";
+import packageJson from "../../package.json";
 import { LiveClock, Toaster } from "./widgets";
 
 const NAV = [
@@ -92,7 +93,7 @@ export function Shell({ children, orgName }: { children: ReactNode; orgName: str
       {/* پانوشت */}
       <div className="border-t border-white/[0.06] px-5 py-4">
         <div className="text-[11px] font-semibold text-zinc-300">{orgName}</div>
-        <div className="mt-0.5 text-[10px] text-zinc-600">نسخه ۱٫۰ — تحت وب، قابل نصب روی سرور داخلی</div>
+        <div className="mt-0.5 text-[10px] text-zinc-600">نسخه v{packageJson.version} — تحت وب، قابل نصب روی شبکه داخلی</div>
       </div>
     </aside>
   );
