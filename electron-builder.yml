@@ -4,7 +4,6 @@ copyright: "Vaqtban HR Suite"
 
 extraMetadata:
   name: vaqtban-desktop
-  version: 1.2.0
   description: "Vaqtban — Persian HR attendance & payroll suite (desktop)"
   author: Vaqtban
   main: electron/main.cjs
