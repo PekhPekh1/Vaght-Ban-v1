@@ -303,13 +303,66 @@ export async function addManualSession(input: ManualSessionInput): Promise<Actio
     const startMs = dateTimeMs(input.date, input.startTime);
     let endMs = input.endTime ? dateTimeMs(input.date, input.endTime) : null;
     if (endMs != null && endMs <= startMs) endMs += 24 * 60 * 60 * 1000;
+
+    const note = input.note?.trim() || (input.kind === "exit" ? "خروج موقت (ثبت دستی)" : "ثبت دستی");
+
+    if (input.kind === "work" && endMs != null) {
+      // اگر پرسنل ورود را ثبت کرده ولی خروج نهایی را فراموش کرده،
+      // رکورد شیفت باز را تکمیل می‌کنیم؛ شیفت تکراری نمی‌سازیم.
+      const sameDay = await db
+        .select()
+        .from(timeSessions)
+        .where(
+          and(
+            eq(timeSessions.employeeId, input.employeeId),
+            eq(timeSessions.date, input.date)
+          )
+        )
+        .orderBy(asc(timeSessions.startAt));
+
+      const openWork = sameDay.filter((s) => s.kind === "work" && s.endAt == null);
+      if (openWork.length > 1) {
+        return fail("برای این روز بیش از یک شیفت باز وجود دارد؛ ابتدا رکوردهای تکراری را بررسی کنید");
+      }
+
+      if (openWork.length === 1) {
+        await db
+          .update(timeSessions)
+          .set({
+            startAt: new Date(startMs),
+            endAt: new Date(endMs),
+            note,
+          })
+          .where(eq(timeSessions.id, openWork[0].id));
+
+        // خروج موقت بازِ داخل همین شیفت، حداکثر تا زمان خروج نهایی بسته می‌شود.
+        // این کار مانع باقی ماندن وضعیت «خارج» برای روزی می‌شود که شیفت بسته شده است.
+        const openExits = sameDay.filter(
+          (s) =>
+            s.kind === "exit" &&
+            s.endAt == null &&
+            s.startAt.getTime() >= startMs &&
+            s.startAt.getTime() <= endMs!
+        );
+        for (const exit of openExits) {
+          await db
+            .update(timeSessions)
+            .set({ endAt: new Date(endMs) })
+            .where(eq(timeSessions.id, exit.id));
+        }
+
+        refresh();
+        return ok("شیفت باز تکمیل شد و خروج‌های موقت باز تا زمان خروج نهایی بسته شدند");
+      }
+    }
+
     await db.insert(timeSessions).values({
       employeeId: input.employeeId,
       kind: input.kind,
       date: input.date,
       startAt: new Date(startMs),
       endAt: endMs != null ? new Date(endMs) : null,
-      note: input.note?.trim() || (input.kind === "exit" ? "خروج موقت (ثبت دستی)" : "ثبت دستی"),
+      note,
     });
     refresh();
     return ok("تردد دستی ثبت شد");
